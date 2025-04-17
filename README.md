@@ -22,7 +22,7 @@ This is a union of version v0 and v1 as we also provide information about the gr
 
 The motivation behind v3 is to slim down information to `g` as much as possible. With v3 you can observe if information about the last hidden state can be inferred from the candidate state. This version should be used in ablation studies.
 ![v3](figures/v3.png "V3")
-    
+            
 
 ## Other changes
 
