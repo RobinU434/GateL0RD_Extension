@@ -2,15 +2,16 @@ from typing import Tuple
 from torch import nn
 import torch
 
-from gatel0rd.common import (
+from project.gatel0rd.common import (
     _GateL0RD,
     GaussianNoise,
     HeavisideST,
     ReTanh,
-    build_embedding_fc,
+    create_fan_in,
 )
 
-class GateL0RDCellv2(nn.Module):
+
+class GateL0RDCellv0(nn.Module):
     def __init__(
         self,
         input_size: int,
@@ -33,36 +34,44 @@ class GateL0RDCellv2(nn.Module):
         self.n_o_layers = n_o_layers
         self.gate_noise_level = gate_noise_level
 
-        self.g = build_embedding_fc(
-            self.hidden_size + self.hidden_size + self.input_size,
-            self.hidden_size,
-            self.n_g_layers,
-            self.hidden_size,
-            activation="ELU",
+        self.g = nn.Sequential(
+            create_fan_in(
+                n_layers=self.n_g_layers,
+                input_dim=self.input_size + self.hidden_size,
+                output_size=self.hidden_size,
+                a_func="Tanh",
+                fan_offset=-2,
+                final_activation=False,
+            ),
+            GaussianNoise(self.gate_noise_level),
+            ReTanh(),
         )
-        self.g = nn.Sequential(self.g, GaussianNoise(self.gate_noise_level), ReTanh())
 
-        self.r = build_embedding_fc(
-            self.input_size + self.hidden_size,
-            self.hidden_size,
-            self.n_g_layers,
-            self.hidden_size,
-            activation="ELU",
+        self.r = create_fan_in(
+            n_layers=self.n_r_layers,
+            input_dim=self.input_size + self.hidden_size,
+            output_size=self.hidden_size,
+            a_func="Tanh",
+            fan_offset=-2,
+            final_activation=True,
         )
-        self.r = nn.Sequential(self.r, nn.Tanh())
 
-        self.out_enc = build_embedding_fc(
-            self.input_size + self.hidden_size,
-            self.hidden_size,
-            self.n_g_layers,
-            self.hidden_size,
-            activation="ELU",
+        assert self.n_o_layers > 0, "At least 1 layers for work load splitting required"
+        self.out_enc = create_fan_in(
+            n_layers=self.n_o_layers - 1,
+            input_dim=self.input_size + self.hidden_size,
+            output_size=self.input_size + self.hidden_size,
+            a_func="Tanh",
+            fan_offset=-2,
         )
+
         self.fc_p = nn.Sequential(
-            nn.ELU(), nn.Linear(self.hidden_size, self.output_size)
+            nn.Linear(self.input_size + self.hidden_size, self.output_size),
+            nn.Tanh(),
         )
         self.fc_o = nn.Sequential(
-            nn.ELU(), nn.Linear(self.hidden_size, self.output_size), nn.Sigmoid()
+            nn.Linear(self.input_size + self.hidden_size, self.output_size),
+            nn.Sigmoid(),
         )
 
     def forward(
@@ -89,8 +98,7 @@ class GateL0RDCellv2(nn.Module):
         concat = torch.cat([x_t, hx], dim=1)
         candidate_hidden = self.r.forward(concat)
 
-        h_concat = torch.cat([candidate_hidden, concat], dim=1)
-        lambda_t = self.g.forward(h_concat)
+        lambda_t = self.g.forward(concat)
         theta_t = HeavisideST.apply(lambda_t)
 
         new_hx = lambda_t * candidate_hidden + (1 - lambda_t) * hx
@@ -102,8 +110,7 @@ class GateL0RDCellv2(nn.Module):
         return y_t, new_hx, theta_t
 
 
-
-class GateL0RDv2(_GateL0RD):
+class GateL0RDv0(_GateL0RD):
     def __init__(
         self,
         input_size,
@@ -131,12 +138,15 @@ class GateL0RDv2(_GateL0RD):
         )
 
     def _build_cell(self):
-        return GateL0RDCellv2(
-            input_size=self.input_size,
+        return GateL0RDCellv0(
+            input_size=self.cell_input_dim,
             hidden_size=self.hidden_size,
-            output_size=self.output_size,
+            output_size=self.cell_output_dim,
             n_g_layers=self.n_g_layers,
             n_r_layers=self.n_r_layers,
             n_o_layers=self.n_o_layers,
             gate_noise_level=self.gate_noise_level,
         )
+    
+    def __repr__(self):
+        return super().__repr__()
