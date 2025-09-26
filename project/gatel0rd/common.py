@@ -94,7 +94,7 @@ class _GateL0RD(nn.Module):
 
     def _build_cell(self):
         raise NotImplementedError
-    
+
     def init_hidden_state(self, x: torch.Tensor) -> torch.Tensor:
         """_summary_
 
@@ -105,18 +105,22 @@ class _GateL0RD(nn.Module):
             torch.Tensor: initialized hidden state
         """
         if self.num_init_inputs > 0:
-            return self.f_init.forward(x[:self.num_init_inputs])
+            return self.f_init.forward(x[: self.num_init_inputs])
         _, batch_dim, _ = x.shape
         return torch.zeros((batch_dim, self.hidden_size), device=x.device)
 
     def forward(
-        self, x: torch.Tensor, h_init: torch.Tensor = None
+        self,
+        x: torch.Tensor,
+        h_init: torch.Tensor = None,
+        recurrent_mask: torch.Tensor = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """_summary_
 
         Args:
             x (torch.Tensor): If batch_first (batch_size, seq_length, input_dim) else (seq_length, batch_size, input_dim)
             h_init (torch.Tensor, optional): Custom init hidden state. Expected dim (batch_size, hidden_dim). If None fall back to zeros. Defaults to None.
+            recurrent_mask (torch.Torch, optional):
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -131,20 +135,34 @@ class _GateL0RD(nn.Module):
             # put seq dim in front -> (seq_length, batch_dim, feature_dim)
             x = x.permute(1, 0, 2)
 
-        seq_len, _  , _ = x.shape
-
         # init hidden state if needed
         if h_init is None:
             hx = self.init_hidden_state(x)
         else:
             hx = h_init
+        seq_len = x.shape[0]
+
+        if recurrent_mask is None:
+            recurrent_mask = torch.ones((*x.shape[:2], 1))
+        else:
+            assert (
+                recurrent_mask.shape[:2] == x.shape
+            ), "Recurrent mask shape has to be (seq_length, batch_size) to be compatible"
+            assert (
+                recurrent_mask[self.num_init_inputs] == 0
+            ).sum() == 0, "Teacher forcing is required in the first recurrent input. Otherwise no information about start"
 
         # recurrent forward
         self._h_seq.append(hx)
+        last_output = None
         y_s = []
         thetas = []
-        for seq_idx in range(seq_len):
-            y_t, hx, theta_t = self.cell.forward(x[seq_idx], hx)
+        for seq_idx in range(self.num_init_inputs, seq_len):
+            x_inp = x[seq_idx] * recurrent_mask[seq_idx] + last_output * (
+                1 - recurrent_mask[seq_idx]
+            )
+            y_t, hx, theta_t = self.cell.forward(x_inp, hx)
+            last_output = y_t
             y_s.append(y_t)
             thetas.append(theta_t)
             self._h_seq.append(hx)
@@ -160,9 +178,6 @@ class _GateL0RD(nn.Module):
             thetas = thetas.permute(1, 0, 2)
 
         return y_s, hx, thetas
-
-    def __repr__(self):
-        return super().__repr__()
 
 
 def create_fan_in(
@@ -191,7 +206,7 @@ def create_fan_in(
     for pre_l in range(n_layers):
         # Fan in type of network, decreasing features per layer
         pre_l_factor = pow(2, (n_layers - pre_l + fan_offset))
-        layers.append(nn.Linear(h_dim, pre_l_factor * feature_dim))
+        layers.append(nn.Linear(h_dim, int(pre_l_factor * feature_dim)))
         layers.append(getattr(nn, a_func)())
         h_dim = pre_l_factor * feature_dim
 

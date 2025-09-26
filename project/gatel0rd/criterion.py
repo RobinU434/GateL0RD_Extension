@@ -1,4 +1,3 @@
-
 from typing import Any, Callable
 
 import torch
@@ -15,6 +14,6 @@ class GateL0RDCriterion:
         task_loss = self.task_criterion(*args)
         loss = task_loss + self.reg_lambda * theta.mean()
         return loss
-    
+
     def __call__(self, *args, theta: torch.Tensor) -> torch.Tensor:
         return self.forward(*args, theta)

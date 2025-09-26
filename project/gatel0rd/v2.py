@@ -10,6 +10,7 @@ from project.gatel0rd.common import (
     create_fan_in,
 )
 
+
 class GateL0RDCellv2(nn.Module):
     def __init__(
         self,
@@ -37,7 +38,7 @@ class GateL0RDCellv2(nn.Module):
             create_fan_in(
                 n_layers=self.n_g_layers,
                 input_dim=self.input_size + self.hidden_size + self.hidden_size,
-                output_size=self.hidden_size,
+                feature_dim=self.hidden_size,
                 a_func="Tanh",
                 fan_offset=-2,
                 final_activation=False,
@@ -49,7 +50,7 @@ class GateL0RDCellv2(nn.Module):
         self.r = create_fan_in(
             n_layers=self.n_r_layers,
             input_dim=self.input_size + self.hidden_size,
-            output_size=self.hidden_size,
+            feature_dim=self.hidden_size,
             a_func="Tanh",
             fan_offset=-2,
             final_activation=True,
@@ -59,7 +60,7 @@ class GateL0RDCellv2(nn.Module):
         self.out_enc = create_fan_in(
             n_layers=self.n_o_layers - 1,
             input_dim=self.input_size + self.hidden_size,
-            output_size=self.input_size + self.hidden_size,
+            feature_dim=self.input_size + self.hidden_size,
             a_func="Tanh",
             fan_offset=-2,
         )
@@ -87,9 +88,9 @@ class GateL0RDCellv2(nn.Module):
             - hidden_out: (batch_size, hidden_dim)
             - theta_t: (batch_size, hidden_dim)
         """
-        assert len(x_t.shape) == 2, (
-            f"Expected (batch_size, input_features) in x_t, but got: {x_t.shape}"
-        )
+        assert (
+            len(x_t.shape) == 2
+        ), f"Expected (batch_size, input_features) in x_t, but got: {x_t.shape}"
 
         if hx is None:
             hx = torch.zeros((len(x_t), self.hidden_size), device=x_t.device)
@@ -108,7 +109,6 @@ class GateL0RDCellv2(nn.Module):
         y_t = self.fc_p.forward(out_embed) * self.fc_o.forward(out_embed)
 
         return y_t, new_hx, theta_t
-
 
 
 class GateL0RDv2(_GateL0RD):
