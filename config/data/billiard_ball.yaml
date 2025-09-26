@@ -1,0 +1,15 @@
+# @package data
+_target_: project.utils.config.DataConfig
+
+data_dir: data
+dataset_name: BilliardBall
+batch_size: 32
+sequence_length: 50
+prediction_steps: 1
+overlap_ratio: 0.5
+train_ratio: 0.7
+val_ratio: 0.15
+test_ratio: 0.15
+normalize: true
+num_workers: 4
+pin_memory: true

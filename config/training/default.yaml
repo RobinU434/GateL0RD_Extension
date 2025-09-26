@@ -1,0 +1,29 @@
+# @package training
+_target_: project.utils.config.TrainingConfig
+
+max_epochs: 100
+learning_rate: 0.001
+weight_decay: 0.0001
+optimizer_name: adam
+scheduler_name: null
+
+# Loss function
+task_loss: mse
+reg_lambda: 0.01
+
+# Early stopping
+early_stopping_patience: 15
+early_stopping_min_delta: 0.001
+
+# Checkpointing
+save_top_k: 3
+monitor_metric: val_loss
+
+# Hardware
+gpus: 1
+precision: 32
+
+# Logging
+log_theta_stats: true
+log_every_n_steps: 50
+deterministic: true

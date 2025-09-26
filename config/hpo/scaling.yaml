@@ -1,0 +1,25 @@
+# @package hpo
+_target_: project.utils.config.HPOConfig
+
+study_name: gatel0rd_scaling
+storage_url: null
+direction: minimize
+n_trials: 100
+timeout: null
+
+# Pruning
+pruner_name: median
+pruner_n_startup_trials: 5
+pruner_n_warmup_steps: 10
+pruner_interval_steps: 5
+
+# Search space (ranges or choices)
+search_space:
+  model_version: [v0, v1, v2, v3]
+  hidden_size: [32, 64, 128]
+  n_g_layers: [1, 4]
+  n_r_layers: [1, 4]
+  n_o_layers: [1, 3]
+  gate_noise_level: [0.1, 2.0]
+  learning_rate: [0.0001, 0.01]
+  reg_lambda: [0.001, 0.1]

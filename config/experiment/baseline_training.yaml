@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+  - model: v0
+  - data: billiard_ball
+  - training: default
+  - hpo: null
+  - _self_
+
+name: gatel0rd_baseline
+description: Baseline training for GateL0RD v0
+experiment_type: training
+
+model:
+  n_g_layers: 2
+  n_r_layers: 2

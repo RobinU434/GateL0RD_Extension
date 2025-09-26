@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - model: v0
+  - data: billiard_ball
+  - training: hpo
+  - hpo: scaling
+  - _self_
+
+name: gatel0rd_scaling
+description: Parameter scaling experiment across GateL0RD versions
+experiment_type: hpo

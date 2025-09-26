@@ -1,0 +1,12 @@
+# @package model
+_target_: project.utils.config.ModelConfig
+
+version: v2
+input_size: 10
+hidden_size: 64
+output_size: 10
+n_g_layers: 2
+n_r_layers: 2
+n_o_layers: 1
+gate_noise_level: 1.0
+batch_first: true

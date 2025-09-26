@@ -1,0 +1,4 @@
+run:
+  dir: results/${hydra.job.name}/${model.version}/${data.dataset_name}/${now:%Y-%m-%d-%H-%M-%S}
+job:
+  chdir: false
