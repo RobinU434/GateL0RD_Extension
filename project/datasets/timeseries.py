@@ -12,6 +12,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 
+from project.datasets.data_handler import load_data
+
 
 class TimeSeriesDataset(Dataset):
     """
@@ -61,37 +63,9 @@ class TimeSeriesDataset(Dataset):
 
     def _load_data(self) -> np.ndarray:
         """Load data from file(s)."""
-        if os.path.isfile(self.data_path):
-            # Single file
-            if self.data_path.endswith(".npy"):
-                data = np.load(self.data_path)
-            elif self.data_path.endswith(".npz"):
-                loaded = np.load(self.data_path)
-                if self.data_key:
-                    data = loaded[self.data_key]
-                else:
-                    # Use first available key
-                    data = loaded[list(loaded.keys())[0]]
-            else:
-                raise ValueError(f"Unsupported file format: {self.data_path}")
-
-        elif os.path.isdir(self.data_path):
-            # Directory with multiple files
-            data_files = [f for f in os.listdir(self.data_path) if f.endswith(".npy")]
-            if not data_files:
-                raise ValueError(f"No .npy files found in {self.data_path}")
-
-            data_list = []
-            for file in sorted(data_files):
-                file_data = np.load(os.path.join(self.data_path, file))
-                print(file_data.shape)
-                data_list.append(file_data)
-
-            # Concatenate along batch axis
-            data = np.concatenate(data_list, axis=0)
-        else:
-            raise ValueError(f"Data path not found: {self.data_path}")
-
+        
+        data = load_data(self.data_path, self.data_key)
+        data = np.concatenate(list(data.values()), axis=0)
         return data.astype(np.float32)
 
     def _create_sequences(self) -> List[Tuple[int, int]]:
