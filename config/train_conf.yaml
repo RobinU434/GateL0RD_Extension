@@ -1,4 +1,3 @@
-# @package _global_
 defaults:
   - _self_
   - hydra: hydra
@@ -15,6 +14,3 @@ results_dir: results
 # Reproducibility
 seed: 42
 deterministic: true
-
-# Experiment type
-experiment_type: training  # training, hpo, evaluation, comparison

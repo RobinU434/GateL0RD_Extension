@@ -1,6 +1,3 @@
-# @package data
-_target_: project.utils.config.DataConfig
-
 data_dir: data
 dataset_name: FetchPickAndPlace
 batch_size: 32

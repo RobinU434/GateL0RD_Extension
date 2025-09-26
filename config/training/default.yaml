@@ -1,14 +1,15 @@
-# @package training
-_target_: project.utils.config.TrainingConfig
-
 max_epochs: 100
 learning_rate: 0.001
 weight_decay: 0.0001
 optimizer_name: adam
 scheduler_name: null
 
+# AR: Autoregressive, TF: Teacher Forcing
+training_mode: parallel_AR  # single, parallel_AR, parallel_TF
+
 # Loss function
 task_loss: mse
+loss_weighting: exponential
 reg_lambda: 0.01
 
 # Early stopping

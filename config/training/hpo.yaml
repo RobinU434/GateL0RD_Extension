@@ -1,6 +1,3 @@
-# @package training
-_target_: project.utils.config.TrainingConfig
-
 max_epochs: 50
 learning_rate: 0.001
 weight_decay: 0.0001

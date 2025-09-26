@@ -1,4 +1,3 @@
-# @package _global_
 defaults:
   - model: v0
   - data: billiard_ball
