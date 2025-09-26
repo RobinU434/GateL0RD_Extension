@@ -1,7 +1,45 @@
-# Adaptation of GateL0RD
-This is a lightweight PyTorch implementation of GateL0RD and variants to its cell architecture. The original RNN (v0) was presented in presented in ["Sparsely Changing Latent States for Prediction and Planning in Partially Observable Domains"](https://arxiv.org/abs/2110.15949).
+# GateL0RD Deep Learning Pipeline
 
-We provide two variants of GateL0RD: `GateL0RD` can be used like a regular PyTorch `RNN`, whereas `GateL0RDCell` can be used like a PyTorch `RNNCell`.
+A comprehensive PyTorch Lightning-based pipeline for training, evaluating, and comparing GateL0RD models with parameter scaling experiments.
+
+## Overview
+
+This pipeline implements the GateL0RD architecture from ["Sparsely Changing Latent States for Prediction and Planning in Partially Observable Domains"](https://arxiv.org/abs/2110.15949) with focus on:
+
+- **Parameter Scaling**: Experimenting with reduced parameters while maintaining performance
+- **Version Comparison**: Comparing v0-v3 architectures with different gate/recurrent network inputs
+- **HPO Integration**: Hyperparameter optimization using Optuna for g and r network scaling
+- **Time Series Datasets**: Support for continuous data streams with discrete events
+
+## Architecture Versions
+
+| Version | Gate Network Input | Recurrent Network Input | Focus |
+|---------|-------------------|-------------------------|--------|
+| v0 | `[input, hidden]` | `[input, hidden]` | Baseline (full inputs) |
+| v1 | `[hidden, hidden]` | `[input, hidden]` | Reduced gate inputs |
+| v2 | `[input, hidden, hidden]` | `[input, hidden]` | Expanded gate inputs |
+| v3 | `[hidden]` | `[input, hidden]` | Minimal gate inputs |
+
+## Original Implementation
+
+This is a lightweight PyTorch implementation of GateL0RD and variants to its cell architecture. We provide two variants of GateL0RD: `GateL0RD` can be used like a regular PyTorch `RNN`, whereas `GateL0RDCell` can be used like a PyTorch `RNNCell`.
+
+## Installation
+
+### Dependencies
+
+```bash
+# Core dependencies
+pip install torch torchvision pytorch-lightning
+pip install optuna
+pip install numpy pandas matplotlib seaborn
+pip install scikit-learn
+pip install pyyaml
+
+# Optional: For physics simulation datasets
+pip install pybullet
+pip install gym[all]
+```
 
 
 
