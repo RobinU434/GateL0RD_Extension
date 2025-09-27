@@ -79,18 +79,22 @@ class _GateL0RD(nn.Module):
 
     This base class is intended to be subclassed with a custom recurrent cell implementation via the _build_cell method.
     """
+
     def __init__(
         self,
         input_size: int,
         hidden_size: int,
         output_size: int = -1,
+        n_pre_layers: int = 3,
+        n_init_layers: int = 3,
+        n_out_layers: int = 2,
         n_g_layers: int = 1,
         n_r_layers: int = 1,
         n_o_layers: int = 1,
         gate_noise_level: float = 1,
         batch_first: bool = False,
         factor_delta: float = 0.1,
-        num_init_inputs: int = 2,
+        num_warmup_steps: int = 0,
         cell_input_dim: int = 16,
         cell_output_dim: int = 16,
         *args,
@@ -116,56 +120,88 @@ class _GateL0RD(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
+        self.n_pre_layers = n_pre_layers
+        self.n_init_layers = n_init_layers
+        self.n_out_layers = n_out_layers
         self.n_g_layers = n_g_layers
         self.n_r_layers = n_r_layers
         self.n_o_layers = n_o_layers
         self.gate_noise_level = gate_noise_level
         self.batch_first = batch_first
         self.factor_delta = factor_delta
-        self.num_init_inputs = num_init_inputs
+        self.num_warmup_steps = num_warmup_steps
         self.cell_input_dim = cell_input_dim
         self.cell_output_dim = cell_output_dim
-        
-        self._check_params()
 
+        self._check_params()
 
         self._h_seq: torch.Tensor = None
         self.cell = self._build_cell()
-        self.f_pre = create_fan_in(
-            n_layers=3,
-            input_dim=self.input_size,
-            feature_dim=self.cell_input_dim,
-            a_func="Tanh",
-            final_activation=True,
-        )
-        self.f_init = create_fan_in(
-            n_layers=3,
-            input_dim=self.num_init_inputs * self.input_size,
-            feature_dim=self.hidden_size,
-            a_func="Tanh",
-            final_activation=True,
-        )
-        self.f_out = create_fan_in(
-            n_layers=2,
-            input_dim=self.cell_output_dim,
-            feature_dim=self.output_size,
-            a_func="Tanh",
-            final_activation=False,
-        )
+        
+        self.f_pre = self._build_pre_model()
+        self.f_out = self._build_out_model()
+        self.f_init = self._build_init_model()
+        
 
     def _check_params(self):
         # check value ranges
         assert self.input_size > 0, "Input size has to be > 0"
         assert self.hidden_size > 0, "Hidden size has to be > 0"
         assert self.output_size > 0, "Output size has to be > 0"
+        assert self.n_pre_layers >= 0, "Number of pre layers has to be >= 0"
+        assert self.n_init_layers >= 0, "Number of init layers has to be >= 0"
+        assert self.n_out_layers >= 0, "Number of out layers has to be >= 0"
         assert self.n_g_layers > 0, "Number of g layers has to be > 0"
         assert self.n_r_layers > 0, "Number of r layers has to be > 0"
         assert self.n_o_layers > 0, "Number of o layers has to be > 0"
         assert self.gate_noise_level >= 0, "Gate noise level has to be >= 0"
         assert self.factor_delta > 0, "Factor delta has to be > 0"
-        assert self.num_init_inputs >= 0, "Number of init inputs has to be >= 0"
+        assert self.num_warmup_steps >= 0, "Number of init inputs has to be >= 0"
         assert self.cell_input_dim > 0, "Cell input dim has to be > 0"
         assert self.cell_output_dim > 0, "Cell output dim has to be > 0"
+        
+    def _build_init_model(self) -> nn.Module:
+        if self.num_warmup_steps > 0:
+            return create_fan_in(
+                n_layers=self.n_init_layers,
+                input_dim=self.num_warmup_steps * self.input_size,
+                feature_dim=self.hidden_size,
+                a_func="Tanh",
+                final_activation=True,
+            )
+        else:
+            return None
+
+    def _build_pre_model(self) -> nn.Module:
+        if self.n_pre_layers > 0:
+            return create_fan_in(
+                n_layers=self.n_pre_layers,
+                input_dim=self.input_size,
+                feature_dim=self.cell_input_dim,
+                a_func="Tanh",
+                final_activation=True,
+            )
+        else:
+            assert (
+                self.cell_input_dim == self.input_size
+            ), "If no pre layers are used, cell input dim has to match input size"
+            return nn.Identity()
+
+    
+    def _build_out_model(self) -> nn.Module:
+        if self.n_out_layers > 0:
+            return create_fan_in(
+                n_layers=self.n_out_layers,
+                input_dim=self.cell_output_dim,
+                feature_dim=self.output_size,
+                a_func="Tanh",
+                final_activation=False,
+            )
+        else:   
+            assert (
+                self.cell_output_dim == self.output_size
+            ), "If no out layers are used, cell output dim has to match output size"
+            return nn.Identity()
 
     def _build_cell(self) -> nn.Module:
         raise NotImplementedError
@@ -208,8 +244,9 @@ class _GateL0RD(nn.Module):
         Returns:
             torch.Tensor: Initialized hidden state (batch_dim, hidden_dim)
         """
-        if self.num_init_inputs > 0:
-            return self.f_init.forward(x[: self.num_init_inputs])
+        if self.num_warmup_steps > 0:
+            return self.f_init.forward(x[: self.num_warmup_steps])
+
         _, batch_dim, _ = x.shape
         return torch.zeros((batch_dim, self.hidden_size), device=x.device)
 
@@ -246,18 +283,17 @@ class _GateL0RD(nn.Module):
             hx = h_init
         seq_len = x.shape[0]
 
-        
         if recurrent_mask is None:
             recurrent_mask = torch.ones((*x.shape[:2], 1))
         else:
             assert recurrent_mask.shape[:2] == x.shape, (
                 "Recurrent mask shape has to be (seq_length, batch_size) to be compatible"
             )
-            assert (recurrent_mask[self.num_init_inputs] == 0).sum() == 0, (
+            assert (recurrent_mask[self.num_warmup_steps] == 0).sum() == 0, (
                 "Teacher forcing is required in the first recurrent input. Otherwise no information about start"
             )
 
-        # selection of postprocess function 
+        # selection of postprocess function
         if predict_deltas:
             post_process_func: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = (
                 self._delta_postprocess
@@ -272,20 +308,20 @@ class _GateL0RD(nn.Module):
         last_output = None
         y_s = []
         thetas = []
-        for seq_idx in range(self.num_init_inputs, seq_len):
+        for seq_idx in range(self.num_warmup_steps, seq_len):
             # teacher forcing
             if last_output is None or recurrent_mask[seq_idx]:
                 x_tf = x[seq_idx]
             else:
                 x_tf = last_output
-            
+
             x_inp = self.f_pre.forward(x_tf)
             y_t, hx, theta_t = self.cell.forward(x_inp, hx)
-            
+
             # postprocessing
             y_t = post_process_func(y_t, x_tf)
             last_output = y_t
-            
+
             # collect outputs
             y_s.append(y_t)
             thetas.append(theta_t)

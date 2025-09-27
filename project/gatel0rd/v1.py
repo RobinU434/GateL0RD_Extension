@@ -88,9 +88,9 @@ class GateL0RDCellv1(nn.Module):
             - hidden_out: (batch_size, hidden_dim)
             - theta_t: (batch_size, hidden_dim)
         """
-        assert (
-            len(x_t.shape) == 2
-        ), f"Expected (batch_size, input_features) in x_t, but got: {x_t.shape}"
+        assert len(x_t.shape) == 2, (
+            f"Expected (batch_size, input_features) in x_t, but got: {x_t.shape}"
+        )
 
         if hx is None:
             hx = torch.zeros((len(x_t), self.hidden_size), device=x_t.device)
@@ -117,11 +117,18 @@ class GateL0RDv1(_GateL0RD):
         input_size,
         hidden_size,
         output_size=-1,
+        n_pre_layers=3,
+        n_init_layers=3,
+        n_out_layers=2,
         n_g_layers=1,
         n_r_layers=1,
         n_o_layers=1,
         gate_noise_level=1,
         batch_first=False,
+        factor_delta=0.1,
+        num_warmup_steps=0,
+        cell_input_dim=16,
+        cell_output_dim=16,
         *args,
         **kwargs,
     ):
@@ -129,11 +136,18 @@ class GateL0RDv1(_GateL0RD):
             input_size,
             hidden_size,
             output_size,
+            n_pre_layers,
+            n_init_layers,
+            n_out_layers,
             n_g_layers,
             n_r_layers,
             n_o_layers,
             gate_noise_level,
             batch_first,
+            factor_delta,
+            num_warmup_steps,
+            cell_input_dim,
+            cell_output_dim,
             *args,
             **kwargs,
         )
