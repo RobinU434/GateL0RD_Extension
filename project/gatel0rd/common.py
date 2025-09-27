@@ -85,9 +85,6 @@ class _GateL0RD(nn.Module):
         input_size: int,
         hidden_size: int,
         output_size: int = -1,
-        n_pre_layers: int = 3,
-        n_init_layers: int = 3,
-        n_out_layers: int = 2,
         n_g_layers: int = 1,
         n_r_layers: int = 1,
         n_o_layers: int = 1,
@@ -97,6 +94,9 @@ class _GateL0RD(nn.Module):
         num_warmup_steps: int = 0,
         cell_input_dim: int = 16,
         cell_output_dim: int = 16,
+        init_net_kwargs: dict = None,
+        pre_net_kwargs: dict = None,
+        out_net_kwargs: dict = None,
         *args,
         **kwargs,
     ):
@@ -112,17 +112,37 @@ class _GateL0RD(nn.Module):
             gate_noise_level (float, optional): Standard deviation of the Gaussian noise added to the gates. Defaults to 1.
             batch_first (bool, optional): If True, the input and output tensors are provided as (batch, seq, feature). Defaults to False.
             factor_delta (float, optional): Scaling factor for the delta update. Defaults to 0.1.
-            num_init_inputs (int, optional): Number of initial inputs used to compute the initial hidden state. Defaults to 2.
+            num_warmup_steps (int, optional): Number of initial inputs used to compute the initial hidden state. Defaults to 0.
             cell_input_dim (int, optional): Dimension of the cell input. Defaults to 16.
             cell_output_dim (int, optional): Dimension of the cell output. Defaults to 16.
+            init_net_kwargs (dict, optional): Additional keyword arguments for the initialization network. Defaults to None.
+            pre_net_kwargs (dict, optional): Additional keyword arguments for the preprocessing network. Defaults to None.
+            out_net_kwargs (dict, optional): Additional keyword arguments for the output network. Defaults to None.
+
+        Network Configuration:
+            The model consists of three main feedforward networks that can be customized:
+
+            1. **Initialization Network (f_init)**: Computes initial hidden state from first num_warmup_steps inputs.
+               Default kwargs: {'a_func': 'Tanh', 'final_activation': True, 'fan_offset': -1}
+
+            2. **Preprocessing Network (f_pre)**: Transforms raw inputs before feeding to the recurrent cell.
+               Default kwargs: {'a_func': 'Tanh', 'final_activation': True, 'fan_offset': -1}
+
+            3. **Output Network (f_out)**: Projects cell outputs to final output space.
+               Default kwargs: {'a_func': 'Tanh', 'final_activation': False, 'fan_offset': -1}
+
+            Example customization:
+                init_net_kwargs = {'a_func': 'ReLU', 'fan_offset': -2}
+                pre_net_kwargs = {'a_func': 'Sigmoid', 'final_activation': False}
+                out_net_kwargs = {'a_func': 'LeakyReLU', 'fan_offset': 0}
+
+            Available activation functions: 'Tanh', 'ReLU', 'LeakyReLU', 'Sigmoid', 'GELU', 'Swish'
+            fan_offset controls the exponential scaling of hidden dimensions: 2^(n_layers - layer_idx + fan_offset)
         """
         super().__init__(*args, **kwargs)
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.n_pre_layers = n_pre_layers
-        self.n_init_layers = n_init_layers
-        self.n_out_layers = n_out_layers
         self.n_g_layers = n_g_layers
         self.n_r_layers = n_r_layers
         self.n_o_layers = n_o_layers
@@ -133,15 +153,55 @@ class _GateL0RD(nn.Module):
         self.cell_input_dim = cell_input_dim
         self.cell_output_dim = cell_output_dim
 
+        # Set default kwargs for each network
+        self.init_net_kwargs = self._get_default_init_kwargs()
+        if init_net_kwargs:
+            self.init_net_kwargs.update(init_net_kwargs)
+
+        self.pre_net_kwargs = self._get_default_pre_kwargs()
+        if pre_net_kwargs:
+            self.pre_net_kwargs.update(pre_net_kwargs)
+
+        self.out_net_kwargs = self._get_default_out_kwargs()
+        if out_net_kwargs:
+            self.out_net_kwargs.update(out_net_kwargs)
+
         self._check_params()
 
         self._h_seq: torch.Tensor = None
         self.cell = self._build_cell()
-        
+
         self.f_pre = self._build_pre_model()
         self.f_out = self._build_out_model()
         self.f_init = self._build_init_model()
-        
+
+    def _get_default_init_kwargs(self) -> dict:
+        """Get default kwargs for initialization network."""
+
+        return {
+            "a_func": "Tanh",
+            "n_layers": 3,
+            "final_activation": True,
+            "fan_offset": -1,
+        }
+
+    def _get_default_pre_kwargs(self) -> dict:
+        """Get default kwargs for preprocessing network."""
+        return {
+            "a_func": "Tanh",
+            "n_layers": 3,
+            "final_activation": True,
+            "fan_offset": -1,
+        }
+
+    def _get_default_out_kwargs(self) -> dict:
+        """Get default kwargs for output network."""
+        return {
+            "a_func": "Tanh",
+            "n_layers": 2,
+            "final_activation": False,
+            "fan_offset": -1,
+        }
 
     def _check_params(self):
         # check value ranges
@@ -159,15 +219,13 @@ class _GateL0RD(nn.Module):
         assert self.num_warmup_steps >= 0, "Number of init inputs has to be >= 0"
         assert self.cell_input_dim > 0, "Cell input dim has to be > 0"
         assert self.cell_output_dim > 0, "Cell output dim has to be > 0"
-        
+
     def _build_init_model(self) -> nn.Module:
         if self.num_warmup_steps > 0:
             return create_fan_in(
-                n_layers=self.n_init_layers,
                 input_dim=self.num_warmup_steps * self.input_size,
                 feature_dim=self.hidden_size,
-                a_func="Tanh",
-                final_activation=True,
+                **self.init_net_kwargs,
             )
         else:
             return None
@@ -175,32 +233,28 @@ class _GateL0RD(nn.Module):
     def _build_pre_model(self) -> nn.Module:
         if self.n_pre_layers > 0:
             return create_fan_in(
-                n_layers=self.n_pre_layers,
                 input_dim=self.input_size,
                 feature_dim=self.cell_input_dim,
-                a_func="Tanh",
-                final_activation=True,
+                **self.pre_net_kwargs,
             )
         else:
-            assert (
-                self.cell_input_dim == self.input_size
-            ), "If no pre layers are used, cell input dim has to match input size"
+            assert self.cell_input_dim == self.input_size, (
+                "If no pre layers are used, cell input dim has to match input size"
+            )
             return nn.Identity()
 
-    
     def _build_out_model(self) -> nn.Module:
         if self.n_out_layers > 0:
             return create_fan_in(
                 n_layers=self.n_out_layers,
                 input_dim=self.cell_output_dim,
                 feature_dim=self.output_size,
-                a_func="Tanh",
-                final_activation=False,
+                **self.out_net_kwargs,
             )
-        else:   
-            assert (
-                self.cell_output_dim == self.output_size
-            ), "If no out layers are used, cell output dim has to match output size"
+        else:
+            assert self.cell_output_dim == self.output_size, (
+                "If no out layers are used, cell output dim has to match output size"
+            )
             return nn.Identity()
 
     def _build_cell(self) -> nn.Module:
