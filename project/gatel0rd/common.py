@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Tuple
 from torch import nn
 import torch
@@ -40,6 +41,44 @@ class GaussianNoise(nn.Module):
 
 
 class _GateL0RD(nn.Module):
+    """
+    Base class for GateL0RD-style recurrent neural networks.
+
+    This class implements a general framework for sequence modeling where the hidden state is updated recurrently using a custom cell, and the output can be either the absolute value or a delta (increment) over the input, resembling the solution of a discretized differential equation.
+
+    Mathematical Formulation:
+        Let x_t in R^{input_dim} be the input at time t, and h_t in R^{hidden_dim} the hidden state.
+        The model processes sequences as follows:
+
+        1. Preprocessing:
+            x_t' = f_pre(x_t)
+            where f_pre is a feedforward network (fan-in structure).
+
+        2. Recurrent Cell:
+            (y_t, h_{t+1}, θ_t) = cell(x_t', h_t)
+            where cell is a user-defined module returning the cell output y_t, updated hidden state h_{t+1}, and optional gate parameters θ_t.
+
+        3. Postprocessing:
+            - If predict_deltas is False:
+                output_t = f_out(y_t)
+            - If predict_deltas is True:
+                output_t = x_t + delta * f_out(y_t)
+            where f_out is a feedforward network, and delta (factor_delta) is a scaling factor for the delta update.
+
+        4. Sequence Generation:
+            The model supports teacher forcing via a recurrent_mask, allowing the use of ground truth inputs or previous outputs at each time step.
+
+    Initialization:
+        The initial hidden state h_0 is computed from the first num_init_inputs inputs using a separate feedforward network f_init, or set to zeros if num_init_inputs is 0.
+
+    Output:
+        For a sequence of length T, the model returns:
+            - outputs: sequence of outputs (T - num_init_inputs, batch_size, output_dim)
+            - hidden_out: final hidden state
+            - theta_t: sequence of gate parameters (if applicable)
+
+    This base class is intended to be subclassed with a custom recurrent cell implementation via the _build_cell method.
+    """
     def __init__(
         self,
         input_size: int,
@@ -50,9 +89,29 @@ class _GateL0RD(nn.Module):
         n_o_layers: int = 1,
         gate_noise_level: float = 1,
         batch_first: bool = False,
+        factor_delta: float = 0.1,
+        num_init_inputs: int = 2,
+        cell_input_dim: int = 16,
+        cell_output_dim: int = 16,
         *args,
         **kwargs,
     ):
+        """Initialize the _GateL0RD model.
+
+        Args:
+            input_size (int): Size of the input features.
+            hidden_size (int): Size of the hidden state.
+            output_size (int, optional): Size of the output features. Defaults to -1.
+            n_g_layers (int, optional): Number of layers in the gating mechanism. Defaults to 1.
+            n_r_layers (int, optional): Number of layers in the recurrent cell. Defaults to 1.
+            n_o_layers (int, optional): Number of layers in the output projection. Defaults to 1.
+            gate_noise_level (float, optional): Standard deviation of the Gaussian noise added to the gates. Defaults to 1.
+            batch_first (bool, optional): If True, the input and output tensors are provided as (batch, seq, feature). Defaults to False.
+            factor_delta (float, optional): Scaling factor for the delta update. Defaults to 0.1.
+            num_init_inputs (int, optional): Number of initial inputs used to compute the initial hidden state. Defaults to 2.
+            cell_input_dim (int, optional): Dimension of the cell input. Defaults to 16.
+            cell_output_dim (int, optional): Dimension of the cell output. Defaults to 16.
+        """
         super().__init__(*args, **kwargs)
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -62,13 +121,15 @@ class _GateL0RD(nn.Module):
         self.n_o_layers = n_o_layers
         self.gate_noise_level = gate_noise_level
         self.batch_first = batch_first
+        self.factor_delta = factor_delta
+        self.num_init_inputs = num_init_inputs
+        self.cell_input_dim = cell_input_dim
+        self.cell_output_dim = cell_output_dim
+        
+        self._check_params()
 
-        self.cell_input_dim = 16
-        self.cell_output_dim = 16
-        # how many time steps of ts will you pass in to init the hidden state
-        self.num_init_inputs = 2
 
-        self._h_seq = []
+        self._h_seq: torch.Tensor = None
         self.cell = self._build_cell()
         self.f_pre = create_fan_in(
             n_layers=3,
@@ -92,17 +153,60 @@ class _GateL0RD(nn.Module):
             final_activation=False,
         )
 
-    def _build_cell(self):
+    def _check_params(self):
+        # check value ranges
+        assert self.input_size > 0, "Input size has to be > 0"
+        assert self.hidden_size > 0, "Hidden size has to be > 0"
+        assert self.output_size > 0, "Output size has to be > 0"
+        assert self.n_g_layers > 0, "Number of g layers has to be > 0"
+        assert self.n_r_layers > 0, "Number of r layers has to be > 0"
+        assert self.n_o_layers > 0, "Number of o layers has to be > 0"
+        assert self.gate_noise_level >= 0, "Gate noise level has to be >= 0"
+        assert self.factor_delta > 0, "Factor delta has to be > 0"
+        assert self.num_init_inputs >= 0, "Number of init inputs has to be >= 0"
+        assert self.cell_input_dim > 0, "Cell input dim has to be > 0"
+        assert self.cell_output_dim > 0, "Cell output dim has to be > 0"
+
+    def _build_cell(self) -> nn.Module:
         raise NotImplementedError
 
-    def init_hidden_state(self, x: torch.Tensor) -> torch.Tensor:
-        """_summary_
+    def _delta_postprocess(
+        self, cell_out: torch.Tensor, x_raw: torch.Tensor
+    ) -> torch.Tensor:
+        """solve differential equation to get new position
+        x = x_raw + factor_delta * delta
 
         Args:
-            x (torch.Tensor): (seq_length, batch_dim, feature_dim)
+            cell_out (torch.Tensor): raw cell output (batch_dim, feature_dim)
+            x_raw (torch.Tensor): raw input (batch_dim, feature_dim)
 
         Returns:
-            torch.Tensor: initialized hidden state
+            torch.Tensor: postprocessed deltas
+        """
+        cell_out = self.f_out.forward(cell_out)
+        res = x_raw + self.factor_delta * cell_out
+        return res
+
+    def _post_process(self, cell_out: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        """Postprocess the cell output.
+
+        Args:
+            cell_out (torch.Tensor): raw cell output (batch_dim, feature_dim)
+
+        Returns:
+            torch.Tensor: postprocessed output
+        """
+        cell_out = self.f_out.forward(cell_out)
+        return cell_out
+
+    def init_hidden_state(self, x: torch.Tensor) -> torch.Tensor:
+        """Initialize the hidden state.
+
+        Args:
+            x (torch.Tensor): Input tensor (seq_length, batch_dim, feature_dim)
+
+        Returns:
+            torch.Tensor: Initialized hidden state (batch_dim, hidden_dim)
         """
         if self.num_init_inputs > 0:
             return self.f_init.forward(x[: self.num_init_inputs])
@@ -114,13 +218,15 @@ class _GateL0RD(nn.Module):
         x: torch.Tensor,
         h_init: torch.Tensor = None,
         recurrent_mask: torch.Tensor = None,
+        predict_deltas: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """_summary_
+        """Forward pass through the _GateL0RD model.
 
         Args:
             x (torch.Tensor): If batch_first (batch_size, seq_length, input_dim) else (seq_length, batch_size, input_dim)
             h_init (torch.Tensor, optional): Custom init hidden state. Expected dim (batch_size, hidden_dim). If None fall back to zeros. Defaults to None.
-            recurrent_mask (torch.Torch, optional):
+            recurrent_mask (torch.Tensor, optional): Mask for teacher forcing. Shape (seq_length, batch_size, 1). 1 means use input, 0 means use last output. Defaults to None.
+            predict_deltas (bool, optional): Predict deltas instead of absolute values. Defaults to False.
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -128,8 +234,6 @@ class _GateL0RD(nn.Module):
                 - hidden_out: (batch_size, hidden_dim)
                 - theta_t: If batch_first (batch_size, seq_length, output_dim) else (seq_length, batch_size, output_dim)
         """
-        self._h_seq = []
-
         # batch correction
         if self.batch_first:
             # put seq dim in front -> (seq_length, batch_dim, feature_dim)
@@ -142,33 +246,53 @@ class _GateL0RD(nn.Module):
             hx = h_init
         seq_len = x.shape[0]
 
+        
         if recurrent_mask is None:
             recurrent_mask = torch.ones((*x.shape[:2], 1))
         else:
-            assert (
-                recurrent_mask.shape[:2] == x.shape
-            ), "Recurrent mask shape has to be (seq_length, batch_size) to be compatible"
-            assert (
-                recurrent_mask[self.num_init_inputs] == 0
-            ).sum() == 0, "Teacher forcing is required in the first recurrent input. Otherwise no information about start"
+            assert recurrent_mask.shape[:2] == x.shape, (
+                "Recurrent mask shape has to be (seq_length, batch_size) to be compatible"
+            )
+            assert (recurrent_mask[self.num_init_inputs] == 0).sum() == 0, (
+                "Teacher forcing is required in the first recurrent input. Otherwise no information about start"
+            )
+
+        # selection of postprocess function 
+        if predict_deltas:
+            post_process_func: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = (
+                self._delta_postprocess
+            )
+        else:
+            post_process_func: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = (
+                self._post_process
+            )
 
         # recurrent forward
-        self._h_seq.append(hx)
+        _h_seq = [hx]
         last_output = None
         y_s = []
         thetas = []
         for seq_idx in range(self.num_init_inputs, seq_len):
-            x_inp = x[seq_idx] * recurrent_mask[seq_idx] + last_output * (
-                1 - recurrent_mask[seq_idx]
-            )
+            # teacher forcing
+            if last_output is None or recurrent_mask[seq_idx]:
+                x_tf = x[seq_idx]
+            else:
+                x_tf = last_output
+            
+            x_inp = self.f_pre.forward(x_tf)
             y_t, hx, theta_t = self.cell.forward(x_inp, hx)
+            
+            # postprocessing
+            y_t = post_process_func(y_t, x_tf)
             last_output = y_t
+            
+            # collect outputs
             y_s.append(y_t)
             thetas.append(theta_t)
-            self._h_seq.append(hx)
+            _h_seq.append(hx)
 
         # organize outputs and logs
-        self._h_seq = torch.stack(self._h_seq)
+        self._h_seq = torch.stack(_h_seq)
         y_s = torch.stack(y_s)
         thetas = torch.stack(thetas)
 
