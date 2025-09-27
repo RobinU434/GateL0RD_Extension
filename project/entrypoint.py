@@ -30,5 +30,31 @@ class Entrypoint:
         from project.scripts.data_handler import split_and_save_dataset
 
         split_and_save_dataset(
-            data_dir, train_ratio, val_ratio, test_ratio, output_dir, random_seed, log_level
+            data_dir,
+            train_ratio,
+            val_ratio,
+            test_ratio,
+            output_dir,
+            random_seed,
+            log_level,
+        )
+
+    def compare_models(
+        self,
+        input_size=10,
+        output_size=10,
+        hidden_size=64,
+        n_g_layers=2,
+        n_r_layers=2,
+        n_o_layers=2,
+    ):
+        from project.scripts.helper import compare_versions
+
+        compare_versions(
+            input_size=input_size,
+            output_size=output_size,
+            hidden_size=hidden_size,
+            n_g_layers=n_g_layers,
+            n_r_layers=n_r_layers,
+            n_o_layers=n_o_layers,
         )

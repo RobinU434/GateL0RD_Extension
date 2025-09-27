@@ -2,6 +2,52 @@ from argparse import ArgumentParser
 from typing import Tuple, Dict, List
 
 
+def add_compare_models_args(parser: ArgumentParser) -> ArgumentParser:
+    parser.add_argument(
+        "--input-size",
+        help="--no-documentation-exists--",
+        dest="input_size",
+        default=10,
+        required=False,
+    )
+    parser.add_argument(
+        "--output-size",
+        help="--no-documentation-exists--",
+        dest="output_size",
+        default=10,
+        required=False,
+    )
+    parser.add_argument(
+        "--hidden-size",
+        help="--no-documentation-exists--",
+        dest="hidden_size",
+        default=64,
+        required=False,
+    )
+    parser.add_argument(
+        "--n-g-layers",
+        help="--no-documentation-exists--",
+        dest="n_g_layers",
+        default=2,
+        required=False,
+    )
+    parser.add_argument(
+        "--n-r-layers",
+        help="--no-documentation-exists--",
+        dest="n_r_layers",
+        default=2,
+        required=False,
+    )
+    parser.add_argument(
+        "--n-o-layers",
+        help="--no-documentation-exists--",
+        dest="n_o_layers",
+        default=2,
+        required=False,
+    )
+    return parser
+
+
 def add_split_dataset_args(parser: ArgumentParser) -> ArgumentParser:
     parser.add_argument(
         "--data-dir",
@@ -50,6 +96,14 @@ def add_split_dataset_args(parser: ArgumentParser) -> ArgumentParser:
         default=42,
         required=False,
     )
+    parser.add_argument(
+        "--log-level",
+        help="--no-documentation-exists--",
+        dest="log_level",
+        type=str,
+        default="INFO",
+        required=False,
+    )
     return parser
 
 
@@ -91,6 +145,11 @@ def setup_entrypoint_parser(
     )
     split_dataset = add_split_dataset_args(split_dataset)
     subparser["split_dataset"] = split_dataset
+    compare_models = command_subparser.add_parser(
+        "compare-models", help="--no-documentation-exists--"
+    )
+    compare_models = add_compare_models_args(compare_models)
+    subparser["compare_models"] = compare_models
     return parser, subparser
 
 

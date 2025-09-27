@@ -32,6 +32,17 @@ def execute(args: dict) -> bool:
                 val_ratio=args["val_ratio"],
                 test_ratio=args["test_ratio"],
                 random_seed=args["random_seed"],
+                log_level=args["log_level"],
+            )
+
+        case "compare-models":
+            module.compare_models(
+                input_size=args["input_size"],
+                output_size=args["output_size"],
+                hidden_size=args["hidden_size"],
+                n_g_layers=args["n_g_layers"],
+                n_r_layers=args["n_r_layers"],
+                n_o_layers=args["n_o_layers"],
             )
 
         case _:
