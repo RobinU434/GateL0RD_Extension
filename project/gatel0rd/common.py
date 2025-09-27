@@ -237,9 +237,9 @@ class _GateL0RD(nn.Module):
                 **self.pre_net_kwargs,
             )
         else:
-            assert self.cell_input_dim == self.input_size, (
-                "If no pre layers are used, cell input dim has to match input size"
-            )
+            assert (
+                self.cell_input_dim == self.input_size
+            ), "If no pre layers are used, cell input dim has to match input size"
             return nn.Identity()
 
     def _build_out_model(self) -> nn.Module:
@@ -251,9 +251,9 @@ class _GateL0RD(nn.Module):
                 **self.out_net_kwargs,
             )
         else:
-            assert self.cell_output_dim == self.output_size, (
-                "If no out layers are used, cell output dim has to match output size"
-            )
+            assert (
+                self.cell_output_dim == self.output_size
+            ), "If no out layers are used, cell output dim has to match output size"
             return nn.Identity()
 
     def _build_cell(self) -> nn.Module:
@@ -315,7 +315,8 @@ class _GateL0RD(nn.Module):
         Args:
             x (torch.Tensor): If batch_first (batch_size, seq_length, input_dim) else (seq_length, batch_size, input_dim)
             h_init (torch.Tensor, optional): Custom init hidden state. Expected dim (batch_size, hidden_dim). If None fall back to zeros. Defaults to None.
-            recurrent_mask (torch.Tensor, optional): Mask for teacher forcing. Shape (seq_length, batch_size, 1). 1 means use input, 0 means use last output. Defaults to None.
+            recurrent_mask (torch.Tensor, optional): Mask for teacher forcing. Shape (seq_length, batch_size, 1). 1 means use input, 0 means use last output.
+                If no mask or None is given the mask will be initialized to zeros. Defaults to None.
             predict_deltas (bool, optional): Predict deltas instead of absolute values. Defaults to False.
 
         Returns:
@@ -337,17 +338,18 @@ class _GateL0RD(nn.Module):
         seq_len = x.shape[0]
 
         if recurrent_mask is None:
-            recurrent_mask = torch.ones((*x.shape[:2], 1))
+            recurrent_mask = torch.zeros((*x.shape[:2], 1))
+            recurrent_mask[: self.num_warmup_steps] = 1
         else:
-            assert recurrent_mask.shape[:2] == x.shape, (
-                "Recurrent mask shape has to be (seq_length, batch_size) to be compatible"
-            )
-            assert recurrent_mask.shape[-1] == 1 or len(recurrent_mask.shape) == 2, (
-                "Recurrent mask shape has to be (seq_length, batch_size, 1) or (seq_length, batch_size)"
-            )
-            assert (recurrent_mask[self.num_warmup_steps] == 0).sum() == 0, (
-                "Teacher forcing is required in the first recurrent input. Otherwise no information about start"
-            )
+            assert (
+                recurrent_mask.shape[:2] == x.shape
+            ), "Recurrent mask shape has to be (seq_length, batch_size) to be compatible"
+            assert (
+                recurrent_mask.shape[-1] == 1 or len(recurrent_mask.shape) == 2
+            ), "Recurrent mask shape has to be (seq_length, batch_size, 1) or (seq_length, batch_size)"
+            assert (
+                recurrent_mask[self.num_warmup_steps] == 0
+            ).sum() == 0, "Teacher forcing is required in the first recurrent input. Otherwise no information about start"
 
         # check that the first sequence item of the recurrent mask is 1, if it is not like this correct it but print a warning
         if not (recurrent_mask[: self.num_warmup_steps] == 1).all():
@@ -358,13 +360,13 @@ class _GateL0RD(nn.Module):
 
         # selection of postprocess function
         if predict_deltas:
-            post_process_func: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = (
-                self._delta_postprocess
-            )
+            post_process_func: Callable[
+                [torch.Tensor, torch.Tensor], torch.Tensor
+            ] = self._delta_postprocess
         else:
-            post_process_func: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = (
-                self._post_process
-            )
+            post_process_func: Callable[
+                [torch.Tensor, torch.Tensor], torch.Tensor
+            ] = self._post_process
 
         # recurrent forward
         _h_seq = [hx]
