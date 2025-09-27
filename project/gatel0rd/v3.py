@@ -88,9 +88,9 @@ class GateL0RDCellv3(nn.Module):
             - hidden_out: (batch_size, hidden_dim)
             - theta_t: (batch_size, hidden_dim)
         """
-        assert len(x_t.shape) == 2, (
-            f"Expected (batch_size, input_features) in x_t, but got: {x_t.shape}"
-        )
+        assert (
+            len(x_t.shape) == 2
+        ), f"Expected (batch_size, input_features) in x_t, but got: {x_t.shape}"
 
         if hx is None:
             hx = torch.zeros((len(x_t), self.hidden_size), device=x_t.device)
