@@ -33,14 +33,14 @@ class GateL0RDCellv0(nn.Module):
         self.n_r_layers = n_r_layers
         self.n_o_layers = n_o_layers
         self.gate_noise_level = gate_noise_level
-
+        
         self.g = nn.Sequential(
             create_fan_in(
                 n_layers=self.n_g_layers,
                 input_dim=self.input_size + self.hidden_size,
                 feature_dim=self.hidden_size,
                 a_func="Tanh",
-                fan_offset=-2,
+                fan_offset=-1,
                 final_activation=False,
             ),
             GaussianNoise(self.gate_noise_level),
@@ -52,7 +52,7 @@ class GateL0RDCellv0(nn.Module):
             input_dim=self.input_size + self.hidden_size,
             feature_dim=self.hidden_size,
             a_func="Tanh",
-            fan_offset=-2,
+            fan_offset=-1,
             final_activation=True,
         )
 

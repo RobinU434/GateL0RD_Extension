@@ -1,6 +1,6 @@
 from pathlib import Path
 from omegaconf import DictConfig
-from project.datasets.timeseries import TimeSeriesDataModule
+from project.datasets.lightning_datamodule import TimeSeriesDataModule
 
 
 def create_data_module(config: DictConfig) -> TimeSeriesDataModule:

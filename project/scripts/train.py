@@ -64,6 +64,7 @@ def run_training(
     model = create_model(
         config, data_module.get_feature_dim(), data_module.get_feature_dim()
     )
+    print(model)
 
     # Setup trainer
     trainer = pl.Trainer(

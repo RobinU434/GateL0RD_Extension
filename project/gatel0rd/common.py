@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import logging
 from typing import Tuple
 from torch import nn
 import torch
@@ -123,13 +124,13 @@ class _GateL0RD(nn.Module):
             The model consists of three main feedforward networks that can be customized:
 
             1. **Initialization Network (f_init)**: Computes initial hidden state from first num_warmup_steps inputs.
-               Default kwargs: {'a_func': 'Tanh', 'final_activation': True, 'fan_offset': -1}
+                Default kwargs: {'a_func': 'Tanh', 'final_activation': True, 'fan_offset': -1}
 
             2. **Preprocessing Network (f_pre)**: Transforms raw inputs before feeding to the recurrent cell.
-               Default kwargs: {'a_func': 'Tanh', 'final_activation': True, 'fan_offset': -1}
+                Default kwargs: {'a_func': 'Tanh', 'final_activation': True, 'fan_offset': -1}
 
             3. **Output Network (f_out)**: Projects cell outputs to final output space.
-               Default kwargs: {'a_func': 'Tanh', 'final_activation': False, 'fan_offset': -1}
+                Default kwargs: {'a_func': 'Tanh', 'final_activation': False, 'fan_offset': -1}
 
             Example customization:
                 init_net_kwargs = {'a_func': 'ReLU', 'fan_offset': -2}
@@ -171,9 +172,9 @@ class _GateL0RD(nn.Module):
         self._h_seq: torch.Tensor = None
         self.cell = self._build_cell()
 
-        self.f_pre = self._build_pre_model()
-        self.f_out = self._build_out_model()
-        self.f_init = self._build_init_model()
+        self.f_pre: nn.Module = self._build_pre_model()
+        self.f_out: nn.Module = self._build_out_model()
+        self.f_init: nn.Module = self._build_init_model()
 
     def _get_default_init_kwargs(self) -> dict:
         """Get default kwargs for initialization network."""
@@ -208,9 +209,6 @@ class _GateL0RD(nn.Module):
         assert self.input_size > 0, "Input size has to be > 0"
         assert self.hidden_size > 0, "Hidden size has to be > 0"
         assert self.output_size > 0, "Output size has to be > 0"
-        assert self.n_pre_layers >= 0, "Number of pre layers has to be >= 0"
-        assert self.n_init_layers >= 0, "Number of init layers has to be >= 0"
-        assert self.n_out_layers >= 0, "Number of out layers has to be >= 0"
         assert self.n_g_layers > 0, "Number of g layers has to be > 0"
         assert self.n_r_layers > 0, "Number of r layers has to be > 0"
         assert self.n_o_layers > 0, "Number of o layers has to be > 0"
@@ -228,10 +226,11 @@ class _GateL0RD(nn.Module):
                 **self.init_net_kwargs,
             )
         else:
-            return None
+            return nn.Identity()
 
     def _build_pre_model(self) -> nn.Module:
-        if self.n_pre_layers > 0:
+        n_pre_layers = self.pre_net_kwargs.get("n_layers", 0)
+        if n_pre_layers > 0:
             return create_fan_in(
                 input_dim=self.input_size,
                 feature_dim=self.cell_input_dim,
@@ -244,9 +243,9 @@ class _GateL0RD(nn.Module):
             return nn.Identity()
 
     def _build_out_model(self) -> nn.Module:
-        if self.n_out_layers > 0:
+        n_out_layers = self.out_net_kwargs.get("n_layers", 0)
+        if n_out_layers > 0:
             return create_fan_in(
-                n_layers=self.n_out_layers,
                 input_dim=self.cell_output_dim,
                 feature_dim=self.output_size,
                 **self.out_net_kwargs,
@@ -343,9 +342,19 @@ class _GateL0RD(nn.Module):
             assert recurrent_mask.shape[:2] == x.shape, (
                 "Recurrent mask shape has to be (seq_length, batch_size) to be compatible"
             )
+            assert recurrent_mask.shape[-1] == 1 or len(recurrent_mask.shape) == 2, (
+                "Recurrent mask shape has to be (seq_length, batch_size, 1) or (seq_length, batch_size)"
+            )
             assert (recurrent_mask[self.num_warmup_steps] == 0).sum() == 0, (
                 "Teacher forcing is required in the first recurrent input. Otherwise no information about start"
             )
+
+        # check that the first sequence item of the recurrent mask is 1, if it is not like this correct it but print a warning
+        if not (recurrent_mask[: self.num_warmup_steps] == 1).all():
+            logging.warning(
+                "Warning: The first num_warmup_steps items of the recurrent mask should be 1 (use input). Correcting the mask."
+            )
+            recurrent_mask[: self.num_warmup_steps] = 1
 
         # selection of postprocess function
         if predict_deltas:
@@ -359,15 +368,14 @@ class _GateL0RD(nn.Module):
 
         # recurrent forward
         _h_seq = [hx]
-        last_output = None
+        last_output = torch.zeros_like(x[0])
         y_s = []
         thetas = []
         for seq_idx in range(self.num_warmup_steps, seq_len):
             # teacher forcing
-            if last_output is None or recurrent_mask[seq_idx]:
-                x_tf = x[seq_idx]
-            else:
-                x_tf = last_output
+            x_tf = x[seq_idx] * recurrent_mask[seq_idx] + last_output * (
+                1 - recurrent_mask[seq_idx]
+            )
 
             x_inp = self.f_pre.forward(x_tf)
             y_t, hx, theta_t = self.cell.forward(x_inp, hx)

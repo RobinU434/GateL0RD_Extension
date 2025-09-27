@@ -14,6 +14,7 @@ import pytorch_lightning as pl
 from torch.optim import Adam, AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 
+from project.gatel0rd.common import _GateL0RD
 from project.gatel0rd.v0 import GateL0RDv0
 from project.gatel0rd.v1 import GateL0RDv1
 from project.gatel0rd.v2 import GateL0RDv2
@@ -49,6 +50,7 @@ class GateL0RDLightningModule(pl.LightningModule):
         n_o_layers: int = 1,
         gate_noise_level: float = 1.0,
         # Training parameters
+        training_mode: str = "single",  # "single", "parallel_AR", "parallel_TF"
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
         optimizer_name: str = "adam",
@@ -81,6 +83,7 @@ class GateL0RDLightningModule(pl.LightningModule):
         self.n_r_layers = n_r_layers
         self.n_o_layers = n_o_layers
         self.gate_noise_level = gate_noise_level
+        self.training_mode = training_mode
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.optimizer_name = optimizer_name
@@ -88,6 +91,8 @@ class GateL0RDLightningModule(pl.LightningModule):
         self.reg_lambda = reg_lambda
         self.prediction_steps = prediction_steps
         self.log_theta_stats = log_theta_stats
+        
+        print(self._hparams)
 
         # Build model
         self.model = self._build_model()
@@ -99,7 +104,7 @@ class GateL0RDLightningModule(pl.LightningModule):
         self.train_losses = []
         self.val_losses = []
 
-    def _build_model(self) -> nn.Module:
+    def _build_model(self) -> _GateL0RD:
         """Build the GateL0RD model based on version and hyperparameters."""
         model_class = self.MODEL_VERSIONS[self.model_version]
 
@@ -133,40 +138,33 @@ class GateL0RDLightningModule(pl.LightningModule):
         self, x: torch.Tensor, h_init: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass through the model."""
-        return self.model(x, h_init=h_init)
+        return self.model.forward(x, h_init=h_init)
 
     def _compute_loss_and_metrics(
         self, batch: Dict[str, torch.Tensor], prefix: str
     ) -> Dict[str, torch.Tensor]:
         """Compute loss and metrics for a batch."""
         # Extract data from batch
-        input_seq = batch["input"]  # (batch_size, seq_len, feature_dim)
-        target_seq = batch["target"]  # (batch_size, pred_steps, feature_dim)
+        prefix_seq = batch.get("prefix", None)  # (batch_size, prefix_len, feature_dim)
+        input_seq = batch.get("input", None)  # (batch_size, seq_len, feature_dim)
+        target_seq = batch.get("target", None)  # (batch_size, pred_steps, feature_dim)
 
-        batch_size, seq_len, feature_dim = input_seq.shape
+        assert prefix_seq is not None, "Batch must contain 'prefix'"
+        assert input_seq is not None, "Batch must contain 'input'"
+        assert target_seq is not None, "Batch must contain 'target'"
+
+        input_seq = torch.cat((prefix_seq, input_seq), dim=1)
 
         # Forward pass
-        outputs, final_hidden, theta = self.forward(input_seq)
-
-        # outputs: (batch_size, seq_len - num_init_inputs, feature_dim)
-        # We need the last prediction_steps outputs
-        pred_outputs = outputs[:, -self.prediction_steps :, :]
-
-        # Reshape for loss computation if needed
-        if self.prediction_steps == 1:
-            pred_outputs = pred_outputs.squeeze(1)  # (batch_size, feature_dim)
-            target_seq = target_seq.squeeze(1)  # (batch_size, feature_dim)
+        pred_outputs, _, theta = self.forward(input_seq)
 
         # Compute loss using GateL0RD criterion
-        loss = self.criterion(pred_outputs, target_seq, theta=theta)
+        loss = self.criterion.forward(pred_outputs, target_seq, theta=theta)
 
         # Compute additional metrics
         with torch.no_grad():
             # Task loss (without regularization)
-            if self.prediction_steps == 1:
-                task_loss = F.mse_loss(pred_outputs, target_seq)
-            else:
-                task_loss = F.mse_loss(pred_outputs, target_seq)
+            task_loss = F.mse_loss(pred_outputs, target_seq)
 
             # Regularization loss
             reg_loss = theta.mean()
@@ -184,13 +182,11 @@ class GateL0RDLightningModule(pl.LightningModule):
         self.log(f"{prefix}_task_loss", task_loss, on_step=False, on_epoch=True)
         self.log(f"{prefix}_reg_loss", reg_loss, on_step=False, on_epoch=True)
         self.log(f"{prefix}_pred_error", pred_error, on_step=False, on_epoch=True)
-
-        if self.log_theta_stats:
-            self.log(f"{prefix}_theta_mean", theta_mean, on_step=False, on_epoch=True)
-            self.log(f"{prefix}_theta_std", theta_std, on_step=False, on_epoch=True)
-            self.log(
-                f"{prefix}_theta_sparsity", theta_sparsity, on_step=False, on_epoch=True
-            )
+        self.log(f"{prefix}_theta_mean", theta_mean, on_step=False, on_epoch=True)
+        self.log(f"{prefix}_theta_std", theta_std, on_step=False, on_epoch=True)
+        self.log(
+            f"{prefix}_theta_sparsity", theta_sparsity, on_step=False, on_epoch=True
+        )
 
         return {
             "loss": loss,
@@ -227,7 +223,9 @@ class GateL0RDLightningModule(pl.LightningModule):
         self, batch: Dict[str, torch.Tensor], batch_idx: int
     ) -> Dict[str, torch.Tensor]:
         """Prediction step for inference."""
-        input_seq = batch["input"]
+        input_seq = batch.get("input", None)
+        prefix_seq = batch.get("prefix", None)
+        input_seq = torch.cat((prefix_seq, input_seq), dim=1)
 
         # Forward pass
         outputs, final_hidden, theta = self.forward(input_seq)
