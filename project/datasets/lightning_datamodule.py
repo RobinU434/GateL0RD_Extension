@@ -8,7 +8,6 @@ import pytorch_lightning as pl
 from project.datasets.timeseries import TimeSeriesDataset
 
 
-
 class TimeSeriesDataModule(pl.LightningDataModule):
     """
     PyTorch Lightning DataModule for time series data.

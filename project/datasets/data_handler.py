@@ -90,7 +90,7 @@ def save_data(data: np.ndarray, save_path: Path, data_key: Optional[str] = None)
         ValueError: If the save path is invalid or unsupported.
     """
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     if save_path.suffix == ".npy":
         np.save(save_path, data)
     elif save_path.suffix == ".npz":

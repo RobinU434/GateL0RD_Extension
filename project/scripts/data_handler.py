@@ -37,7 +37,7 @@ def split_and_save_dataset(
         if output_dir and not isinstance(output_dir, Path)
         else output_dir
     )
-    
+
     if random_seed is not None:
         np.random.seed(random_seed)
 
