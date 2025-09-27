@@ -5,6 +5,7 @@ This module provides a unified interface for training all GateL0RD versions (v0-
 with configurable hyperparameters and scaling experiments.
 """
 
+from collections.abc import Callable
 from typing import Any, Dict, Optional, Tuple
 from omegaconf import DictConfig
 import torch
@@ -20,6 +21,14 @@ from project.gatel0rd.v1 import GateL0RDv1
 from project.gatel0rd.v2 import GateL0RDv2
 from project.gatel0rd.v3 import GateL0RDv3
 from project.gatel0rd.criterion import GateL0RDCriterion
+from project.utils.teacher_forcing import (
+    EXPONENTIAL_DEFAULTS,
+    INVERSE_SIGMOID_DEFAULTS,
+    LINEAR_DEFAULTS,
+    exponential_scheduled_sampling,
+    inverse_sigmoid_scheduled_sampling,
+    linear_scheduled_sampling,
+)
 
 
 class GateL0RDLightningModule(pl.LightningModule):
@@ -48,6 +57,9 @@ class GateL0RDLightningModule(pl.LightningModule):
         n_g_layers: int = 1,
         n_r_layers: int = 1,
         n_o_layers: int = 1,
+        init_net_kwargs: Dict[str, Any] = None,
+        pre_net_kwargs: Dict[str, Any] = None,
+        out_net_kwargs: Dict[str, Any] = None,
         gate_noise_level: float = 1.0,
         # Training parameters
         training_mode: str = "single",  # "single", "parallel_AR", "parallel_TF"
@@ -60,6 +72,10 @@ class GateL0RDLightningModule(pl.LightningModule):
         reg_lambda: float = 0.01,
         # Prediction parameters
         prediction_steps: int = 1,
+        predict_deltas: bool = True,
+        # teacher forcing parameters
+        tf_schedule: str = "exponential",  # "exponential", "linear", "inverse_sigmoid"
+        tf_schedule_kwargs: Dict[str, Any] = None,
         # Logging
         log_theta_stats: bool = True,
         **kwargs,
@@ -82,6 +98,9 @@ class GateL0RDLightningModule(pl.LightningModule):
         self.n_g_layers = n_g_layers
         self.n_r_layers = n_r_layers
         self.n_o_layers = n_o_layers
+        self.init_net_kwargs = init_net_kwargs or {}
+        self.pre_net_kwargs = pre_net_kwargs or {}
+        self.out_net_kwargs = out_net_kwargs or {}
         self.gate_noise_level = gate_noise_level
         self.training_mode = training_mode
         self.learning_rate = learning_rate
@@ -90,15 +109,18 @@ class GateL0RDLightningModule(pl.LightningModule):
         self.scheduler_name = scheduler_name
         self.reg_lambda = reg_lambda
         self.prediction_steps = prediction_steps
+        self.predict_deltas = predict_deltas
+        self.tf_schedule = tf_schedule
+        self.tf_schedule_kwargs = tf_schedule_kwargs or {}
         self.log_theta_stats = log_theta_stats
-        
-        print(self._hparams)
 
         # Build model
         self.model = self._build_model()
 
         # Setup loss function
         self.criterion = self._setup_criterion(task_loss)
+        # Setup teacher forcing schedule
+        self.tf_schedule = self._setup_tf_schedule()
 
         # Metrics storage
         self.train_losses = []
@@ -115,6 +137,9 @@ class GateL0RDLightningModule(pl.LightningModule):
             n_g_layers=self.n_g_layers,
             n_r_layers=self.n_r_layers,
             n_o_layers=self.n_o_layers,
+            init_net_kwargs=self.init_net_kwargs,
+            pre_net_kwargs=self.pre_net_kwargs,
+            out_net_kwargs=self.out_net_kwargs,
             gate_noise_level=self.gate_noise_level,
             batch_first=True,  # Use batch_first for easier handling
         )
@@ -134,11 +159,74 @@ class GateL0RDLightningModule(pl.LightningModule):
             task_criterion=task_criterion, reg_lambda=self.reg_lambda
         )
 
+    def _setup_tf_schedule(self) -> Callable[[int, int, int], torch.Tensor]:
+        """Setup the teacher forcing schedule.
+
+        Raises:
+            ValueError: If the teacher forcing schedule is unknown.
+
+        Returns:
+            Callable[[int, int, int], torch.Tensor]: A function that takes epoch, sequence length, and batch size
+            and returns a tensor representing the teacher forcing mask.
+        """
+        if self.tf_schedule == "exponential":
+            schedule_func = exponential_scheduled_sampling
+            default_kwargs = EXPONENTIAL_DEFAULTS
+        elif self.tf_schedule == "linear":
+            schedule_func = linear_scheduled_sampling
+            default_kwargs = LINEAR_DEFAULTS
+        elif self.tf_schedule == "inverse_sigmoid":
+            schedule_func = inverse_sigmoid_scheduled_sampling
+            default_kwargs = INVERSE_SIGMOID_DEFAULTS
+        else:
+            raise ValueError(f"Unknown teacher forcing schedule: {self.tf_schedule}")
+
+        schedule_kwargs = default_kwargs.update(self.tf_schedule_kwargs)
+
+        def wrapper(epoch: int, sequence_length: int, batch_size: int) -> torch.Tensor:
+            """Get the teacher forcing mask for a given epoch, sequence length, and batch size.
+
+            Args:
+                epoch (int): Current training epoch.
+                sequence_length (int): Length of the input sequence.
+                batch_size (int): Size of the input batch.
+
+            Returns:
+                torch.Tensor: A tensor representing the teacher forcing mask.
+            """
+            schedule = schedule_func(
+                epoch=epoch,
+                seq_len=sequence_length,
+                batch_size=batch_size,
+                **schedule_kwargs,
+            )
+            mask = torch.bernoulli(schedule).to(self.device)
+            return mask
+
+        return wrapper
+
     def forward(
-        self, x: torch.Tensor, h_init: Optional[torch.Tensor] = None
+        self,
+        x: torch.Tensor,
+        h_init: Optional[torch.Tensor] = None,
+        teacher_forcing_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Forward pass through the model."""
-        return self.model.forward(x, h_init=h_init)
+        """Forward pass through the model.
+
+        Args:
+            x (torch.Tensor): _description_
+            h_init (Optional[torch.Tensor], optional): _description_. Defaults to None.
+            teacher_forcing_mask (Optional[torch.Tensor], optional): _description_. Defaults to None.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: _description_
+        """
+        return self.model.forward(
+            x,
+            h_init=h_init,
+            recurrent_mask=teacher_forcing_mask,
+            predict_deltas=self.predict_deltas,
+        )
 
     def _compute_loss_and_metrics(
         self, batch: Dict[str, torch.Tensor], prefix: str
@@ -153,10 +241,23 @@ class GateL0RDLightningModule(pl.LightningModule):
         assert input_seq is not None, "Batch must contain 'input'"
         assert target_seq is not None, "Batch must contain 'target'"
 
+        # Get teacher forcing mask. Teacher forcing is only applied during training
+        # and on the input sequence without the prefix.
+        teacher_forcing_mask = self.tf_schedule(
+            epoch=self.current_epoch,
+            sequence_length=input_seq.size(1),
+            batch_size=input_seq.size(0),
+        )
+
+        # Concatenate prefix and input sequences
         input_seq = torch.cat((prefix_seq, input_seq), dim=1)
 
         # Forward pass
-        pred_outputs, _, theta = self.forward(input_seq)
+        pred_outputs, _, theta = self.forward(
+            input_seq,
+            h_init=None,
+            teacher_forcing_mask=teacher_forcing_mask,
+        )
 
         # Compute loss using GateL0RD criterion
         loss = self.criterion.forward(pred_outputs, target_seq, theta=theta)
@@ -325,10 +426,17 @@ def compare_model_versions(
     output_size: int,
     n_g_layers: int = 1,
     n_r_layers: int = 1,
+    n_o_layers: int = 1,
+    init_net_kwargs: Dict[str, Any] = None,
+    pre_net_kwargs: Dict[str, Any] = None,
+    out_net_kwargs: Dict[str, Any] = None,
 ) -> Dict[str, Dict[str, int]]:
     """Compare complexity of different GateL0RD versions."""
     comparison = {}
-
+    init_net_kwargs = init_net_kwargs or {}
+    pre_net_kwargs = pre_net_kwargs or {}
+    out_net_kwargs = out_net_kwargs or {}
+    
     for version in ["v0", "v1", "v2", "v3"]:
         model = GateL0RDLightningModule(
             model_version=version,
@@ -337,6 +445,10 @@ def compare_model_versions(
             output_size=output_size,
             n_g_layers=n_g_layers,
             n_r_layers=n_r_layers,
+            n_o_layers=n_o_layers,
+            init_net_kwargs=init_net_kwargs,
+            pre_net_kwargs=pre_net_kwargs,
+            out_net_kwargs=out_net_kwargs,
         )
 
         comparison[version] = model.get_model_complexity()
